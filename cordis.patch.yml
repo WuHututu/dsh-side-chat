@@ -1,0 +1,7 @@
+# dsh-side-chat bundle patch
+#
+# `dsh.bundle.patch` layer: installing the package appends one loader row.
+# The host half is inert; the browser half does the work, so no config.
+- insert:
+    - id: side-chat
+      name: 'dsh-side-chat'

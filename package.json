@@ -1,0 +1,31 @@
+{
+  "name": "dsh-side-chat",
+  "version": "0.1.0",
+  "description": "Side conversation in the right Sidebar, rendered by the host's own conversation UI on its own blank session.",
+  "type": "module",
+  "main": "lib/index.js",
+  "exports": {
+    ".": "./lib/index.js",
+    "./client": "./lib/client.js",
+    "./package.json": "./package.json"
+  },
+  "dsh": {
+    "bundle": {
+      "patch": "./cordis.patch.yml"
+    },
+    "client": {
+      "platform": "web"
+    }
+  },
+  "license": "MIT",
+  "keywords": [
+    "dsh",
+    "dsh-plugin",
+    "deepseek-harness",
+    "sidebar",
+    "side-chat"
+  ],
+  "engines": {
+    "node": ">=20"
+  }
+}
