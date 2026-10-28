@@ -1,7 +1,10 @@
 # dsh-side-chat bundle patch
 #
 # `dsh.bundle.patch` layer: installing the package appends one loader row.
-# The host half is inert; the browser half does the work, so no config.
+#
+# The row id is deliberately namespaced: `id` is the loader's unique key, and
+# dsh-sidenote ships a row also called `side-chat`. Sharing the key made one
+# package silently shadow the other depending on load order.
 - insert:
-    - id: side-chat
+    - id: dsh-side-chat
       name: 'dsh-side-chat'
