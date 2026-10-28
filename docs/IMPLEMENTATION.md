@@ -148,13 +148,21 @@ props.renderFactorySlot(
 .dsh-side-chat-view{display:flex;flex-direction:column;min-height:0!important;overflow-y:auto!important}
 
 .dsh-side-chat-host [data-conversation-region="composer"]{position:static!important;flex:0 0 auto;z-index:auto}
+
+/* 统计行空态会折叠，导致输入框先贴底、首轮出用量后被顶高 */
+.dsh-side-chat-host [data-composer-dock]{min-height:22px}
 ```
 
 要点：
 
 - `minmax(0, 1fr)` 让第 1 行有确定上界，转写区才会滚；
 - 输入框从 `sticky` 改回 `static`，它成为第 2 行，不再覆盖正文；
-- `!important` 是必要的——宿主规则优先级更高；两条结构性规则都限定在 `.dsh-side-chat-host` 下，不影响主对话。
+- `[data-composer-dock]` 的 `min-height` 让统计行在空态与有内容时占同一高度，输入框因此不跳；
+- `!important` 是必要的——宿主规则优先级更高；所有规则都限定在 `.dsh-side-chat-host` 下，不影响主对话。
+
+### 「已完成，用时 X」为什么在回答下方
+
+`turn-tail` 是宿主 `conversation.chat.node` 的一个 node kind，`match` 绑定 `turn/end`，源码注释写明 *the tail stays the turn's last node*。也就是说它在**每一轮的末尾**，主对话与侧聊一致，不是布局缺陷，无需修正。
 
 ## 已知限制
 
