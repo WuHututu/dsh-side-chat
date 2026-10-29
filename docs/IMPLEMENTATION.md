@@ -53,13 +53,59 @@ const release = await Promise.resolve(mainAgents.register(handle.agent))
 
 `AgentRegistry.register(agent)` 的契约是「把已构造好的 agent 记录进 store」，因此这一步只增加可达性，不增加持久化。
 
-### 工具集
+### 工具集：必须挂载 agent 预设
 
-新建的 `SystemPrompt` 是**空注册表**——各工具插件把 schema 注册在根实例的全局层上。所以要把共享 `tools` 服务的 wire schema 转发进来：
+一个会话真正能用哪些工具，**不取决于工具插件是否加载，而取决于它的 agent 预设**。会话控制器里的 `composeAgent` 是这么做的：
+
+```js
+async composeAgent(presetId) {
+  const presets = this.ctx.get('agentPresets')
+  if (presets === void 0) return { setup: (_agentCtx, agent) => { this.installSelection(agent) } }
+  const resolvedId = (await presets.resolve(presetId)).id
+  return {
+    agentPreset: resolvedId,
+    setup: async (agentCtx, agent) => {
+      this.installSelection(agent)
+      await presets.mount(agentCtx, resolvedId)   // ← 预设的插件行被挂进 agent 作用域
+    },
+  }
+}
+```
+
+`presets.mount(agentCtx, id)` 会把预设声明的插件行（`dsh-tool-fs`、`dsh-tool-pwsh`、`dsh-tool-fs-search` 等）加载进**该 agent 自己的作用域**，工具随之出现。
+
+只手写 prompt section、不挂预设的话，侧聊只能看到全局层里那几个基础工具。实测就是这个现象：只有 `working_directory` 和 `load_workspace_dependencies`，读文件、跑命令全无。所以 `setup` 里必须先挂预设：
+
+```js
+const presets = ctx.get('agentPresets')
+if (presets !== undefined) {
+  const resolved = await presets.resolve(undefined)   // 不传 = 配置里的默认预设
+  await presets.mount(agentCtx, resolved.id)
+}
+```
+
+`setup` 可以是 async——`AgentLoop` 里是 `await setup?.(...)`，所以能直接 `await` 挂载。
+
+**实测结果**（挂载后，同一句「列出你可用的工具名」）：
+
+```
+ask_user_question, create_goal, edit, exit_plan_mode, get_goal, glob, grep,
+interrupt_agent, job_kill, job_list, job_output, list_agents, present, pwsh,
+read, read_image, schedule_create, ..., todo_write, update_goal, web_fetch,
+web_search, workflow, working_directory, write
+```
+
+共 30 个，含 `read`/`edit`/`glob`/`grep`/`pwsh`/`write`。再让它读一个真实文件，返回了该文件的 `name` 字段值，确认工具是**能真正执行**的，不只是 schema 可见。
+
+### schema 转发
+
+挂载预设之后，`SystemPrompt` 一侧还要把共享 `tools` 服务的 wire schema 转发进隔离实例（新建的 `SystemPrompt` 是空注册表）：
 
 ```js
 isolatedPrompt.tools((context) => sharedTools.wireSchemas(context.scope))
 ```
+
+注意 `tools` 服务**没有**被隔离，执行与 schema 都走同一个注册表。
 
 ### 上下文
 
