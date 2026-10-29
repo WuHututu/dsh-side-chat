@@ -210,6 +210,44 @@ props.renderFactorySlot(
 
 `turn-tail` 是宿主 `conversation.chat.node` 的一个 node kind，`match` 绑定 `turn/end`，源码注释写明 *the tail stays the turn's last node*。也就是说它在**每一轮的末尾**，主对话与侧聊一致，不是布局缺陷，无需修正。
 
+## 选中内容唤起侧聊
+
+在主对话里选中一段回答 → 浮出「在侧边聊天中提问」→ 新开侧聊并把引用填进它的输入框。
+
+### 选区捕获
+
+`document` 上三个监听：`selectionchange`（防抖 200ms）、`mouseup`、`keyup`。校验规则：
+
+- 两端点必须落在**同一个** `[data-chat-flow-kind="assistant-step"]` 节点内 —— 跨消息划选不弹工具条；
+- 带 `data-streaming` 的消息排除（还在流式输出，引用会截到半句）；
+- 带 `[data-dsh-side-chat]` 的自己 DOM 排除（否则点工具条那一刻会被判成选区变化而自杀）。
+
+### 交接的窗口期
+
+`openTabFromTarget` 之后面板才挂载，而面板挂载时宿主**还没有**新会话的 input machine，所以引用不能立刻写。做法是**先入队再开面板**，面板就绪后取：
+
+```js
+pendingQuotes.push({ text: quote, parentSessionId: currentParentSession(ctx), at: Date.now() })
+ctx.sidebarRight.openTabFromTarget(KIND, target)
+```
+
+队列按**父会话 id** 归属，避免一个面板抢走另一个面板的引用；15 秒过期。面板侧在 `state.childId` 就绪后以 160ms 轮询重试约 4 秒，写入成功才出队。
+
+### 写进输入框
+
+会话的输入机器是**按会话**的，取法和宿主一致：
+
+```js
+const scope = sessions.scope(sideSessionId)
+const input = conversation.input.for(scope)
+```
+
+优先用 `insertText`（带 `draftRev` 的 CAS 应用动词，保留 `@` 引用节点），且只在 `phase === 'plain'` 时动草稿；退到 `setDraft` 前必须确认草稿里没有引用节点，否则会把它们压成纯文本。
+
+### 依赖的是宿主内部标记
+
+`data-chat-flow-kind`、`data-streaming`、`data-sidebar-right-session`、`conversation.input.for` 都是宿主**内部实现**，不是公开契约。上游重构会让这个功能静默降级（不弹工具条），不会崩——所以整条链路都在 try/catch 里，解析不到就什么都不做。
+
 ## 已知限制
 
 - **依赖 `sessions.retain`**：宿主不暴露会话所有权时，面板显示本地化失败提示加底层原因，而不是空白。
