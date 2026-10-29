@@ -26,11 +26,15 @@
 
 ## 安装
 
-在 profile 目录下执行：
+用 `dsh` 命令安装：
 
 ```powershell
-pnpm add file:./plugins/dsh-side-chat
+dsh plugin --profile <profile> add github:WuHututu/dsh-side-chat
 ```
+
+把 `<profile>` 换成你的 profile 名（桌面版通常是 `desktop`）。这条命令会把插件写进 `dependencies` 和 `dsh.profile.bundles`，无需手工改配置文件；装完重启应用即可。
+
+也可以在 dsh-market 里搜索 `dsh-side-chat` 一键安装。
 
 ## 使用
 
@@ -39,6 +43,12 @@ pnpm add file:./plugins/dsh-side-chat
 - 一个主对话可以同时开**多个**侧聊，各自独立；
 - 切换主对话不会丢失已开的侧聊，切回来还在；
 - 关闭页签或退出应用即消失，不占任何空间。
+
+## 卸载
+
+```powershell
+dsh plugin --profile <profile> remove dsh-side-chat
+```
 
 ## 更多
 
