@@ -234,6 +234,17 @@ props.renderFactorySlot(
 
 卡片数据是一个模块级 immutable map（`cardsBySession`）配 `useSyncExternalStore`，**订阅函数身份必须稳定**。早期实现给每个会话建一个「第一条引用到达时才存在」的小 store，于是 dock 挂载时订阅的是「没有 store」这件事，卡片后来出现也不会触发重渲染：静默失败，什么都看不见。
 
+### 卡片长什么样
+
+一条侧聊只有**一张**聚合卡：
+
+- 计数条：whale glyph + `N 个已选文本片段`（英文 `{count} selected fragments`），由 `quoteCountOne` / `quoteCountMany` 两个 key 提供 `{count}` 模板，插件自己 `.replace`——不走宿主插值；
+- 正文：一片段一行，`line-clamp: 3` 截断出省略号。侧聊面板宽度有限，长引用必须截，否则 composer 会被顶出可视区；
+- 悬停：`onMouseEnter` 记下卡片视口矩形，浮出 `position: fixed` 的完整文本面板。定 position 而不是 absolute，是因为 dock 的祖先带 overflow 裁剪，绝对定位的面板会在卡片边界被切掉；面板自动选择上/下方位避免出屏，滚动或 resize 时立即收起（否则它会悬在无关内容上方）；
+- 移除：每段一个 ×（平时 0 透明，行 hover 才出现），点一下同时从卡片与宿主上下文删掉。
+
+失败片段保留在卡片里并显示原因，不静默丢弃——引用没进去和「这个功能根本没接上」在用户眼里是同一件事。
+
 ### 卡片只是显示，内容走宿主
 
 点一次引用 = `POST /side-chat/api/quote/add`，宿主把它存进该侧聊的 `quotes` 数组。该侧聊的 prompt section 以**函数形式**注册：
@@ -249,27 +260,11 @@ provider.systemPrompt.section({
 
 组装每一步的 system prompt 时都会重读这个数组，所以点 `×` 删掉卡片，下一步模型就看不到这段引用了。`interpolate: false` 是必须的：引用内容里出现 `{{name}}` 会在组装阶段被判成 prompt 变量并抛错，把整条侧聊打挂。主快照 section 同样带 `interpolate: false`——主对话里出现 `{{` 是常态（模板、日志、代码）。
 
-宿主取不到这段（未重启、路由不存在）时，卡片**保留并标成失败**，把原因写在卡片下面。引用静默消失和「这个功能根本没接上」在用户眼里是同一件事，所以宁可难看也不能看不见。
+### 引用卡交互
 
-### 交接的窗口期
+先入队列再开面板（15 秒 TTL），窗口期靠 `wakeQuotes` 叫醒已开的面板。一个主对话一条侧聊（tab 类型不声明 `multiple`，地址稳定走 reveal）。文案注册早于任何取文案的效果，工具条每次显示时重新解析避免中英文不一致。
 
-`openTabFromTarget` 之后面板才挂载，而面板需要宿主先给出侧聊会话 id，所以引用**先入队再开面板**，面板 `state.childId` 就绪后取：
-
-```js
-pendingQuotes.push({ text: quote, parentSessionId, at: Date.now() })
-ctx.sidebarRight.openTabFromTarget(KIND, target)
-wakeQuotes(parentSessionId)
-```
-
-队列按**父会话 id** 归属，避免一个面板抢走另一个面板的引用；15 秒过期。`wakeQuotes` 是给「面板已经开着」那条路径的：此时面板的重渲染没有任何新依赖可依据，不叫醒它，引用就会永远留在队列里。
-
-### 一个主对话一条侧聊
-
-tab 类型不声明 `multiple`，地址因此稳定，`openTabFromTarget` 命中同一 contentId 时走 reveal/focus 而不是再开一张；右侧栏 layout 本身按会话存，所以不同主对话各自拥有独立的一条侧聊。
-
-### 文案时序
-
-`ctx.locale.bind(NS)` 解析出的文案取决于注册时机：客户端里 `startSelectionBar` 早于 `locale.register` 执行时，按钮会拿到英文兜底（而 tab 标题因为每次渲染都重新解析，看起来是中文——两者不一致就是这种顺序问题的特征）。现在注册效果排在任何取文案的效果之前，并且工具条在每次显示时重新解析。
+Popover hover：`position: fixed` 防止 overflow:hidden 裁剪；自动上/下方位、滚动收卷、resize 收卷。失败标原因不丢弃，用户眼里「看不见的引用」=「功能没接上」。
 
 ### 依赖的是宿主内部标记
 
@@ -296,7 +291,8 @@ tab 类型不声明 `multiple`，地址因此稳定，`openTabFromTarget` 命中
 | 隔离栈挂载、loop 注册 factory | 通过 |
 | 客户端包被发现并下发 | 通过 |
 | 同一主对话重复唤起侧聊 | 复用同一 tab（tab 类型不声明 `multiple`） |
-| 引用流程仿真（mini-React 执行真实 bundle） | 18 项全通过：工具条出现且为中文、点击开 tab、引用**不**进输入框、`quote/add` 落到宿主、卡片渲染出原文与 `×`、移除后卡片消失并通知宿主 |
+| 引用流程仿真（mini-React 执行真实 bundle） | 18 项全通过：工具条出现且为中文、点击开 tab、引用**不**进输入框、`quote/add` 落到宿主、聚合卡渲染计数条与原文、移除后卡片消失并通知宿主 |
+| 聚合卡布局 | 一卡一计数条 + N 片段行，每片段 `line-clamp: 3` 省略号截断，hover 浮出 fixed popover 显示完整文本，自动上下选择，滚动/resize 立即收卷 |
 | 宿主半未重启时 | `POST /side-chat/api/quote/add` → `404 not-found`，卡片保留并标为「失败 + 原因」 |
 
 无头环境无法验证：内嵌面板是否真的绘制、`conversation.input.dock` 在桌面壳里的实际位置、该宿主是否提供 `sessions.retain`。后两者缺失时分别表现为「卡片不出现（但引用仍进上下文）」与「面板明确报错」。
