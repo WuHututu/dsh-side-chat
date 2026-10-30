@@ -267,16 +267,37 @@ props.renderFactorySlot(
 
 - 编辑器里看不见，不破坏「输入框保持干净」；
 - `String.prototype.trim()` 不会去掉它（U+200B 不属于 ECMAScript 空白集），所以宿主认为草稿有内容，发送键可用；
-- 用户开始打字后无需任何处理，这个字符留在消息末尾，肉眼不可见；
+- 用户开始打字后无需任何处理，这个字符留在消息里，肉眼不可见；
 - 清空最后一条引用时把它一并撤掉（`setDraft('')`），输入框回到真正的空。
 
-插件不往草稿里塞引用正文，也不改 `submit()`：两个动作都会让「输入框里看到的」和「消息里实际有的」不一致。
+它只负责**让发送键可用**，不负责消息内容：宿主的用户消息就是草稿文本，所以只放标记会发出一个空气泡。
+
+### 发送的是引用本身
+
+所以真正的发送由插件接管。胶囊挂载后，用 `wrapRef` 找到 `[data-composer-card]`，在卡片上挂**捕获阶段**的 `click` / `keydown` 监听：
+
+- 只认两种动作：点中 `className` 含 `primary` 的按钮（composer 自己的主按钮；附件、模型、权限按钮在同一行，不能被误伤），或按下不带 Shift 的 Enter；
+- 命中时 `preventDefault()` + `stopPropagation()`（拦住宿主的 onClick / 键盘层），把草稿重写成
+
+  ```markdown
+  > “第一段引用”
+  > “第二段引用”
+
+  用户自己打的字
+  ```
+
+- 然后 `setTimeout(0)` 再 `actions.submit()`——宿主的 `submit()` 读的是它已经发布的草稿快照，必须等这次写入落地，不能在同一事件里抢。
+
+用户消息因此是一个真正的引用块，而不是空气泡；输入框里始终没有引用正文（只有那个不可见的标记）。
 
 ### 发送之后
 
-引用在这一轮**开始**时才进 prompt（section 是函数，每步重读），所以不能一按发送就删。胶囊订阅宿主发给 overlay 的 `useInput`，看到 `phase` 离开 `plain`（`submitting` / `adjudicating`）后延时 1500ms 清空全部引用（卡片 + 宿主 `quotes`，逐条 `quote/remove`）：这个时刻系统提示早已组装完、引用已进入本轮上下文，之后再留着只会污染下一轮。
+引用在这一轮**开始**时才进 prompt（section 是函数，每步重读），所以不能一按发送就删。清空由两个信号触发，延时 1500ms 执行：
 
-定时器挂在 ref 上而不是 effect 的 cleanup——`phase` 在提交过程中会来回跳，跟着 cleanup 取消就会永远清不掉。
+- `useInput().phase` 离开 `plain`——但**不能只靠它**：提交状态机在一个 tick 内走完 `plain → adjudicating → submitting → plain`，React 只渲染到最终的 `plain`，中间态永远观察不到（这就是早期版本「发送后胶囊不消失」的真正原因）；
+- 草稿从非空变成空——宿主接受这一轮时会清空编辑器，这个变化是稳定的。
+
+定时器放在模块级 map 而不是组件内 ref：发送过程中 composer 可能重新挂载，组件内的定时器会随之消失。清空后逐条 `quote/remove` 通知宿主，引用不再进入下一轮。
 
 ### 卡片只是显示，内容走宿主
 
@@ -326,7 +347,7 @@ Popover hover：`position: fixed` 防止 overflow:hidden 裁剪；自动上/下�
 | 同一主对话重复唤起侧聊 | 复用同一 tab（tab 类型不声明 `multiple`） |
 | 引用流程仿真（mini-React 执行真实 bundle） | 15 项全通过：点击后清除选区、胶囊只显示计数、悬停浮出 `“…”` 包裹的正文、浮层无序号无按钮、浮层宽度上限为胶囊 2 倍且随内容收缩、离开后延迟关闭、清空即删除并通知宿主 |
 | 悬停范围与光标 | 只有胶囊触发悬停（整行收起处理器）；胶囊 `cursor: default`、浮窗 `cursor: text` |
-| 发送链路 | 空草稿自动放零宽标记（宿主才放行 `submit()`）；`phase` 离开 `plain` 后 1500ms 清空引用；清空后一并撤掉标记 |
+| 发送链路 | 空草稿自动放零宽标记（宿主才放行 `submit()`）；捕获阶段接管主按钮/Enter，把草稿重写成引用块 + 用户文本再提交；草稿被宿主清空后 1500ms 清引用并撤掉标记 |
 | 胶囊形态 | 注册进 `conversation.input.overlay`（卡片内部）；`width: fit-content` 胶囊；`:has()` 命中时卡片 `padding-top: 42px` 撑高；浮层每段 `line-clamp: 3` |
 | 宿主半未重启时 | `POST /side-chat/api/quote/add` → `404 not-found`，卡片保留并标为「失败 + 原因」 |
 
