@@ -222,7 +222,7 @@ props.renderFactorySlot(
 - 带 `data-streaming` 的消息排除（还在流式输出，引用会截到半句）；
 - 带 `[data-dsh-side-chat]` 的自己 DOM 排除（否则点工具条那一刻会被判成选区变化而自杀）。
 
-工具条是纯 DOM（`position:fixed` 挂在 `body`），不为一个按钮起 React 根；文案在**每次显示时**解析，而不是挂载时——见「文案时序」。
+工具条是纯 DOM（`position:fixed` 挂在 `body`），不为一个按钮起 React 根；文案在**每次显示时**解析，而不是挂载时——见「文案时序」。点击「在侧边聊天中提问」后立刻 `removeAllRanges()`：选区不清掉，工具条会一直具备重新弹出的条件，源文本也会一直高亮。
 
 ### 为什么不写进输入框
 
@@ -248,9 +248,12 @@ props.renderFactorySlot(
 
 - 形态：`width: fit-content` + `border-radius: 999px`，宽度只比文字宽一点，不会被拉满整行；
 - 内容：小图标 + `N 个已选文本片段`（英文 `{count} selected fragments`，由 `quoteCountOne` / `quoteCountMany` 提供 `{count}` 模板，插件自己 `.replace`，不走宿主插值）+ 一枚 ×；
+- 悬停态：`transition` 过渡背景色/边框/图标透明度，悬停时底色与边框明显不同；
+- 光标：`cursor: default` —— 卡片整体是文本光标，胶囊是控件，不能显示成"这里能输入"；
 - 胶囊本身**不显示正文**——composer 不是 transcript，正文放到悬停；
-- 悬停浮层：`position: fixed`（避开祖先 overflow 裁剪），列出每段正文，每段 `line-clamp: 3` 省略号截断，段数多时整块 `max-height: 320px` 滚动；自动上/下方位，滚动或 resize 时收卷（否则会悬在无关内容上方）；
-- 移除：胶囊的 × 清空全部（逐条 `quote/remove`），浮层里每段的 × 只删那一段；
+- 悬停浮层：`position: fixed`（避开祖先 overflow 裁剪），宽度 `max-content` 跟随文本长度，上限是胶囊宽度的 2 倍（`maxWidth = 2 × 胶囊实测宽度`），再受窗口宽度约束；每段正文各自一行、用 `“…”` 包裹，`line-clamp: 3` 截断；不显示序号、不显示 ×（分隔靠引号与换行）；段数多时整块 `max-height: 320px` 滚动；自动上/下方位；
+- 关闭时序：`mouseleave` 不立即关闭，延迟 220ms 再关，`mouseenter`（胶囊或浮层本身）取消这个定时器——浮层在胶囊上方几像素处，鼠标要穿过这段空隙，立即关闭会输掉这场竞速；
+- 移除：只有胶囊的 ×，一次清空全部（逐条 `quote/remove`）；
 - 事件：胶囊 `stopPropagation` 掉 `mousedown`/`click`——卡片本身会聚焦编辑器，空输入框时点卡片还会弹工作区选择，胶囊是控件不是卡片。
 
 失败片段不静默丢弃：宿主要不到这段时，浮层里对应片段标红并写出原因——"引用没进去"和"这个功能根本没接上"在用户眼里是同一件事。
@@ -303,7 +306,7 @@ Popover hover：`position: fixed` 防止 overflow:hidden 裁剪；自动上/下�
 | 隔离栈挂载、loop 注册 factory | 通过 |
 | 客户端包被发现并下发 | 通过 |
 | 同一主对话重复唤起侧聊 | 复用同一 tab（tab 类型不声明 `multiple`） |
-| 引用流程仿真（mini-React 执行真实 bundle） | 16 项全通过：工具条出现且为中文、点击开 tab、引用**不**进输入框、`quote/add` 落到宿主、胶囊只显示计数不含正文、悬停浮出正文、清空后胶囊消失并通知宿主、非本插件会话返回空 |
+| 引用流程仿真（mini-React 执行真实 bundle） | 15 项全通过：点击后清除选区、胶囊只显示计数、悬停浮出 `“…”` 包裹的正文、浮层无序号无按钮、浮层宽度上限为胶囊 2 倍且随内容收缩、离开后延迟关闭、清空即删除并通知宿主 |
 | 胶囊形态 | 注册进 `conversation.input.overlay`（卡片内部）；`width: fit-content` 胶囊；`:has()` 命中时卡片 `padding-top: 42px` 撑高；浮层每段 `line-clamp: 3` |
 | 宿主半未重启时 | `POST /side-chat/api/quote/add` → `404 not-found`，卡片保留并标为「失败 + 原因」 |
 
