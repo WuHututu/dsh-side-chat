@@ -261,6 +261,23 @@ props.renderFactorySlot(
 
 胶囊数据是一个模块级 immutable map（`cardsBySession`）配 `useSyncExternalStore`，**订阅函数身份必须稳定**。早期实现给每个会话建一个「第一条引用到达时才存在」的小 store，于是插槽挂载时订阅的是「没有 store」这件事，胶囊后来出现也不会触发重渲染：静默失败，什么都看不见。
 
+### 只有胶囊时也能发送
+
+宿主的提交只放行两种草稿：有文本（`draft.trim() !== ''`）或有附件（`attachmentIds.length > 0`），空草稿按发送键什么都不会发生。所以存在引用、而草稿为空时，插件往草稿里放一个**零宽空格**（U+200B）：
+
+- 编辑器里看不见，不破坏「输入框保持干净」；
+- `String.prototype.trim()` 不会去掉它（U+200B 不属于 ECMAScript 空白集），所以宿主认为草稿有内容，发送键可用；
+- 用户开始打字后无需任何处理，这个字符留在消息末尾，肉眼不可见；
+- 清空最后一条引用时把它一并撤掉（`setDraft('')`），输入框回到真正的空。
+
+插件不往草稿里塞引用正文，也不改 `submit()`：两个动作都会让「输入框里看到的」和「消息里实际有的」不一致。
+
+### 发送之后
+
+引用在这一轮**开始**时才进 prompt（section 是函数，每步重读），所以不能一按发送就删。胶囊订阅宿主发给 overlay 的 `useInput`，看到 `phase` 离开 `plain`（`submitting` / `adjudicating`）后延时 1500ms 清空全部引用（卡片 + 宿主 `quotes`，逐条 `quote/remove`）：这个时刻系统提示早已组装完、引用已进入本轮上下文，之后再留着只会污染下一轮。
+
+定时器挂在 ref 上而不是 effect 的 cleanup——`phase` 在提交过程中会来回跳，跟着 cleanup 取消就会永远清不掉。
+
 ### 卡片只是显示，内容走宿主
 
 点一次引用 = `POST /side-chat/api/quote/add`，宿主把它存进该侧聊的 `quotes` 数组。该侧聊的 prompt section 以**函数形式**注册：
@@ -309,6 +326,7 @@ Popover hover：`position: fixed` 防止 overflow:hidden 裁剪；自动上/下�
 | 同一主对话重复唤起侧聊 | 复用同一 tab（tab 类型不声明 `multiple`） |
 | 引用流程仿真（mini-React 执行真实 bundle） | 15 项全通过：点击后清除选区、胶囊只显示计数、悬停浮出 `“…”` 包裹的正文、浮层无序号无按钮、浮层宽度上限为胶囊 2 倍且随内容收缩、离开后延迟关闭、清空即删除并通知宿主 |
 | 悬停范围与光标 | 只有胶囊触发悬停（整行收起处理器）；胶囊 `cursor: default`、浮窗 `cursor: text` |
+| 发送链路 | 空草稿自动放零宽标记（宿主才放行 `submit()`）；`phase` 离开 `plain` 后 1500ms 清空引用；清空后一并撤掉标记 |
 | 胶囊形态 | 注册进 `conversation.input.overlay`（卡片内部）；`width: fit-content` 胶囊；`:has()` 命中时卡片 `padding-top: 42px` 撑高；浮层每段 `line-clamp: 3` |
 | 宿主半未重启时 | `POST /side-chat/api/quote/add` → `404 not-found`，卡片保留并标为「失败 + 原因」 |
 
