@@ -228,22 +228,34 @@ props.renderFactorySlot(
 
 输入框是 contenteditable，只认两样东西：纯文本，和 `@` 文件引用 chip。引用塞进去只能是两种下场——一串 `> ` markdown 字符（它并不会被渲染成引用块，还占掉打问题的位置），或者去改宿主的草稿文档结构。所以引用**不进输入框**：内容走上下文，形态走界面。
 
-### 引用卡渲染在哪
+### 引用胶囊渲染在哪
 
-宿主的 `conversation.input.dock` 就是「composer 卡片上方的整行插槽」，`scope: session`，官方 occupants（voice-input 的录音态、todo dock）都注册在这里。插件把卡片组件塞进去，用 `props.sessionId` 判断这是不是自己开的会话——不是就 `return null`，所以主对话不会被插一张卡。
+宿主的 `conversation.input.overlay` 是「**卡片内部**的浮动插槽」（`kind: list`，`scope: session`），渲染进 `[data-composer-card]` 顶部的 `[data-composer-overlay]` 锚点——那个锚点是 `height:0; position:absolute; inset:0 0 auto`，专门给浮层用。插件把胶囊注册进去，用 `props.sessionId` 判断这是不是自己开的会话——不是就 `return null`，所以主对话不会多出一枚胶囊。
 
-卡片数据是一个模块级 immutable map（`cardsBySession`）配 `useSyncExternalStore`，**订阅函数身份必须稳定**。早期实现给每个会话建一个「第一条引用到达时才存在」的小 store，于是 dock 挂载时订阅的是「没有 store」这件事，卡片后来出现也不会触发重渲染：静默失败，什么都看不见。
+**为什么不放 `conversation.input.dock`**：dock 是卡片**外面**、卡片上方的一条，渲染出来就是浮在输入框上方的独立方块，与 Codex 的形态不符。也**没有**用 `conversation.input.attachments`：那是 `kind: single` 且已被官方 `ComposerAttachments` 占用，注册进去会把它顶掉，`+` 附件功能一并消失。
 
-### 卡片长什么样
+**胶囊怎么"撑高"卡片**：锚点零高不参与布局，所以由卡片自己让位——
 
-一条侧聊只有**一张**聚合卡：
+```css
+[data-composer-card]:has(.dsh-side-chat-pill) { padding-top: 42px }
+```
 
-- 计数条：whale glyph + `N 个已选文本片段`（英文 `{count} selected fragments`），由 `quoteCountOne` / `quoteCountMany` 两个 key 提供 `{count}` 模板，插件自己 `.replace`——不走宿主插值；
-- 正文：一片段一行，`line-clamp: 3` 截断出省略号。侧聊面板宽度有限，长引用必须截，否则 composer 会被顶出可视区；
-- 悬停：`onMouseEnter` 记下卡片视口矩形，浮出 `position: fixed` 的完整文本面板。定 position 而不是 absolute，是因为 dock 的祖先带 overflow 裁剪，绝对定位的面板会在卡片边界被切掉；面板自动选择上/下方位避免出屏，滚动或 resize 时立即收起（否则它会悬在无关内容上方）；
-- 移除：每段一个 ×（平时 0 透明，行 hover 才出现），点一下同时从卡片与宿主上下文删掉。
+`:has()` 是 Chromium 105+ 的能力（桌面壳满足）。命中时卡片内高增加 32px，正文（附件栏、编辑器）整体下移，胶囊落在留白里；没有引用时规则不命中，卡片保持原高度。这跟"添加一张图片"的占位效果一致。
 
-失败片段保留在卡片里并显示原因，不静默丢弃——引用没进去和「这个功能根本没接上」在用户眼里是同一件事。
+### 胶囊长什么样
+
+一条侧聊只有**一枚**胶囊：
+
+- 形态：`width: fit-content` + `border-radius: 999px`，宽度只比文字宽一点，不会被拉满整行；
+- 内容：小图标 + `N 个已选文本片段`（英文 `{count} selected fragments`，由 `quoteCountOne` / `quoteCountMany` 提供 `{count}` 模板，插件自己 `.replace`，不走宿主插值）+ 一枚 ×；
+- 胶囊本身**不显示正文**——composer 不是 transcript，正文放到悬停；
+- 悬停浮层：`position: fixed`（避开祖先 overflow 裁剪），列出每段正文，每段 `line-clamp: 3` 省略号截断，段数多时整块 `max-height: 320px` 滚动；自动上/下方位，滚动或 resize 时收卷（否则会悬在无关内容上方）；
+- 移除：胶囊的 × 清空全部（逐条 `quote/remove`），浮层里每段的 × 只删那一段；
+- 事件：胶囊 `stopPropagation` 掉 `mousedown`/`click`——卡片本身会聚焦编辑器，空输入框时点卡片还会弹工作区选择，胶囊是控件不是卡片。
+
+失败片段不静默丢弃：宿主要不到这段时，浮层里对应片段标红并写出原因——"引用没进去"和"这个功能根本没接上"在用户眼里是同一件事。
+
+胶囊数据是一个模块级 immutable map（`cardsBySession`）配 `useSyncExternalStore`，**订阅函数身份必须稳定**。早期实现给每个会话建一个「第一条引用到达时才存在」的小 store，于是插槽挂载时订阅的是「没有 store」这件事，胶囊后来出现也不会触发重渲染：静默失败，什么都看不见。
 
 ### 卡片只是显示，内容走宿主
 
@@ -291,8 +303,8 @@ Popover hover：`position: fixed` 防止 overflow:hidden 裁剪；自动上/下�
 | 隔离栈挂载、loop 注册 factory | 通过 |
 | 客户端包被发现并下发 | 通过 |
 | 同一主对话重复唤起侧聊 | 复用同一 tab（tab 类型不声明 `multiple`） |
-| 引用流程仿真（mini-React 执行真实 bundle） | 18 项全通过：工具条出现且为中文、点击开 tab、引用**不**进输入框、`quote/add` 落到宿主、聚合卡渲染计数条与原文、移除后卡片消失并通知宿主 |
-| 聚合卡布局 | 一卡一计数条 + N 片段行，每片段 `line-clamp: 3` 省略号截断，hover 浮出 fixed popover 显示完整文本，自动上下选择，滚动/resize 立即收卷 |
+| 引用流程仿真（mini-React 执行真实 bundle） | 16 项全通过：工具条出现且为中文、点击开 tab、引用**不**进输入框、`quote/add` 落到宿主、胶囊只显示计数不含正文、悬停浮出正文、清空后胶囊消失并通知宿主、非本插件会话返回空 |
+| 胶囊形态 | 注册进 `conversation.input.overlay`（卡片内部）；`width: fit-content` 胶囊；`:has()` 命中时卡片 `padding-top: 42px` 撑高；浮层每段 `line-clamp: 3` |
 | 宿主半未重启时 | `POST /side-chat/api/quote/add` → `404 not-found`，卡片保留并标为「失败 + 原因」 |
 
 无头环境无法验证：内嵌面板是否真的绘制、`conversation.input.dock` 在桌面壳里的实际位置、该宿主是否提供 `sessions.retain`。后两者缺失时分别表现为「卡片不出现（但引用仍进上下文）」与「面板明确报错」。
