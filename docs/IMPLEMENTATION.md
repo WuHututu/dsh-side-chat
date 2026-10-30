@@ -249,7 +249,8 @@ props.renderFactorySlot(
 - 形态：`width: fit-content` + `border-radius: 999px`，宽度只比文字宽一点，不会被拉满整行；
 - 内容：小图标 + `N 个已选文本片段`（英文 `{count} selected fragments`，由 `quoteCountOne` / `quoteCountMany` 提供 `{count}` 模板，插件自己 `.replace`，不走宿主插值）+ 一枚 ×；
 - 悬停态：`transition` 过渡背景色/边框/图标透明度，悬停时底色与边框明显不同；
-- 光标：`cursor: default` —— 卡片整体是文本光标，胶囊是控件，不能显示成"这里能输入"；
+- 光标：胶囊 `cursor: default` —— 卡片整体是文本光标，胶囊是控件，不能显示成"这里能输入"；浮窗里反过来是 `cursor: text`，那段正文是可以选中复制的；
+- 触发范围：**只有胶囊本身**是悬停触发器，胶囊所在那一行的其余空白不响应（整行在手，容易误触）；
 - 胶囊本身**不显示正文**——composer 不是 transcript，正文放到悬停；
 - 悬停浮层：`position: fixed`（避开祖先 overflow 裁剪），宽度 `max-content` 跟随文本长度，上限是胶囊宽度的 2 倍（`maxWidth = 2 × 胶囊实测宽度`），再受窗口宽度约束；每段正文各自一行、用 `“…”` 包裹，`line-clamp: 3` 截断；不显示序号、不显示 ×（分隔靠引号与换行）；段数多时整块 `max-height: 320px` 滚动；自动上/下方位；
 - 关闭时序：`mouseleave` 不立即关闭，延迟 220ms 再关，`mouseenter`（胶囊或浮层本身）取消这个定时器——浮层在胶囊上方几像素处，鼠标要穿过这段空隙，立即关闭会输掉这场竞速；
@@ -307,6 +308,7 @@ Popover hover：`position: fixed` 防止 overflow:hidden 裁剪；自动上/下�
 | 客户端包被发现并下发 | 通过 |
 | 同一主对话重复唤起侧聊 | 复用同一 tab（tab 类型不声明 `multiple`） |
 | 引用流程仿真（mini-React 执行真实 bundle） | 15 项全通过：点击后清除选区、胶囊只显示计数、悬停浮出 `“…”` 包裹的正文、浮层无序号无按钮、浮层宽度上限为胶囊 2 倍且随内容收缩、离开后延迟关闭、清空即删除并通知宿主 |
+| 悬停范围与光标 | 只有胶囊触发悬停（整行收起处理器）；胶囊 `cursor: default`、浮窗 `cursor: text` |
 | 胶囊形态 | 注册进 `conversation.input.overlay`（卡片内部）；`width: fit-content` 胶囊；`:has()` 命中时卡片 `padding-top: 42px` 撑高；浮层每段 `line-clamp: 3` |
 | 宿主半未重启时 | `POST /side-chat/api/quote/add` → `404 not-found`，卡片保留并标为「失败 + 原因」 |
 
