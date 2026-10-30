@@ -212,7 +212,7 @@ props.renderFactorySlot(
 
 ## 选中内容唤起侧聊
 
-在主对话里选中一段回答 → 浮出「在侧边聊天中提问」→ 新开侧聊并把引用填进它的输入框。
+在主对话里选中一段回答 → 浮出「在侧边聊天中提问」→ 打开（或复用）这条主对话的侧聊，选中内容变成输入框上方的一张**引用卡**：看得见、可移除，同时进入这条侧聊的上下文。
 
 ### 选区捕获
 
@@ -222,37 +222,65 @@ props.renderFactorySlot(
 - 带 `data-streaming` 的消息排除（还在流式输出，引用会截到半句）；
 - 带 `[data-dsh-side-chat]` 的自己 DOM 排除（否则点工具条那一刻会被判成选区变化而自杀）。
 
+工具条是纯 DOM（`position:fixed` 挂在 `body`），不为一个按钮起 React 根；文案在**每次显示时**解析，而不是挂载时——见「文案时序」。
+
+### 为什么不写进输入框
+
+输入框是 contenteditable，只认两样东西：纯文本，和 `@` 文件引用 chip。引用塞进去只能是两种下场——一串 `> ` markdown 字符（它并不会被渲染成引用块，还占掉打问题的位置），或者去改宿主的草稿文档结构。所以引用**不进输入框**：内容走上下文，形态走界面。
+
+### 引用卡渲染在哪
+
+宿主的 `conversation.input.dock` 就是「composer 卡片上方的整行插槽」，`scope: session`，官方 occupants（voice-input 的录音态、todo dock）都注册在这里。插件把卡片组件塞进去，用 `props.sessionId` 判断这是不是自己开的会话——不是就 `return null`，所以主对话不会被插一张卡。
+
+卡片数据是一个模块级 immutable map（`cardsBySession`）配 `useSyncExternalStore`，**订阅函数身份必须稳定**。早期实现给每个会话建一个「第一条引用到达时才存在」的小 store，于是 dock 挂载时订阅的是「没有 store」这件事，卡片后来出现也不会触发重渲染：静默失败，什么都看不见。
+
+### 卡片只是显示，内容走宿主
+
+点一次引用 = `POST /side-chat/api/quote/add`，宿主把它存进该侧聊的 `quotes` 数组。该侧聊的 prompt section 以**函数形式**注册：
+
+```js
+provider.systemPrompt.section({
+  name: 'side-chat-quotes',
+  interpolate: false,
+  order: 910,
+  text: () => quotesFor(quotes),
+})
+```
+
+组装每一步的 system prompt 时都会重读这个数组，所以点 `×` 删掉卡片，下一步模型就看不到这段引用了。`interpolate: false` 是必须的：引用内容里出现 `{{name}}` 会在组装阶段被判成 prompt 变量并抛错，把整条侧聊打挂。主快照 section 同样带 `interpolate: false`——主对话里出现 `{{` 是常态（模板、日志、代码）。
+
+宿主取不到这段（未重启、路由不存在）时，卡片**保留并标成失败**，把原因写在卡片下面。引用静默消失和「这个功能根本没接上」在用户眼里是同一件事，所以宁可难看也不能看不见。
+
 ### 交接的窗口期
 
-`openTabFromTarget` 之后面板才挂载，而面板挂载时宿主**还没有**新会话的 input machine，所以引用不能立刻写。做法是**先入队再开面板**，面板就绪后取：
+`openTabFromTarget` 之后面板才挂载，而面板需要宿主先给出侧聊会话 id，所以引用**先入队再开面板**，面板 `state.childId` 就绪后取：
 
 ```js
-pendingQuotes.push({ text: quote, parentSessionId: currentParentSession(ctx), at: Date.now() })
+pendingQuotes.push({ text: quote, parentSessionId, at: Date.now() })
 ctx.sidebarRight.openTabFromTarget(KIND, target)
+wakeQuotes(parentSessionId)
 ```
 
-队列按**父会话 id** 归属，避免一个面板抢走另一个面板的引用；15 秒过期。面板侧在 `state.childId` 就绪后以 160ms 轮询重试约 4 秒，写入成功才出队。
+队列按**父会话 id** 归属，避免一个面板抢走另一个面板的引用；15 秒过期。`wakeQuotes` 是给「面板已经开着」那条路径的：此时面板的重渲染没有任何新依赖可依据，不叫醒它，引用就会永远留在队列里。
 
-### 写进输入框
+### 一个主对话一条侧聊
 
-会话的输入机器是**按会话**的，取法和宿主一致：
+tab 类型不声明 `multiple`，地址因此稳定，`openTabFromTarget` 命中同一 contentId 时走 reveal/focus 而不是再开一张；右侧栏 layout 本身按会话存，所以不同主对话各自拥有独立的一条侧聊。
 
-```js
-const scope = sessions.scope(sideSessionId)
-const input = conversation.input.for(scope)
-```
+### 文案时序
 
-优先用 `insertText`（带 `draftRev` 的 CAS 应用动词，保留 `@` 引用节点），且只在 `phase === 'plain'` 时动草稿；退到 `setDraft` 前必须确认草稿里没有引用节点，否则会把它们压成纯文本。
+`ctx.locale.bind(NS)` 解析出的文案取决于注册时机：客户端里 `startSelectionBar` 早于 `locale.register` 执行时，按钮会拿到英文兜底（而 tab 标题因为每次渲染都重新解析，看起来是中文——两者不一致就是这种顺序问题的特征）。现在注册效果排在任何取文案的效果之前，并且工具条在每次显示时重新解析。
 
 ### 依赖的是宿主内部标记
 
-`data-chat-flow-kind`、`data-streaming`、`data-sidebar-right-session`、`conversation.input.for` 都是宿主**内部实现**，不是公开契约。上游重构会让这个功能静默降级（不弹工具条），不会崩——所以整条链路都在 try/catch 里，解析不到就什么都不做。
+`data-chat-flow-kind`、`data-streaming`、`data-sidebar-right-session`、`conversation.input.dock` 的 props 形状都是宿主**内部实现**，不是公开契约。上游重构会让这个功能静默降级（不弹工具条、不出现卡片），不会崩——所以整条链路都在 try/catch 里。另外宿主半（`lib/index.js`）改了必须重启应用，只刷新页面不会让新路由生效。
 
 ## 已知限制
 
 - **依赖 `sessions.retain`**：宿主不暴露会话所有权时，面板显示本地化失败提示加底层原因，而不是空白。
 - **一页签一会话**：关闭即回收，不恢复。
-- **快照不跟随**：侧聊看不到打开之后主对话的新内容。
+- **快照不跟随**：侧聊看不到打开之后主对话的新内容；引用是例外，它按卡片增删实时生效。
+- **引用不落盘**：和侧聊会话本身一样，重启应用即消失。
 - **布局依赖 `!important`**：见上。
 - **主对话受影响**：`views` 覆盖是全局的，`ChatView` 的包裹层会一并作用到主对话。
 
@@ -267,9 +295,11 @@ const input = conversation.input.for(scope)
 | 开关一次侧聊后的 `$DSH_HOME/sessions` 文件数 | **101 → 101，未变** |
 | 隔离栈挂载、loop 注册 factory | 通过 |
 | 客户端包被发现并下发 | 通过 |
-| 一个主对话开多个侧聊 | `multiple: true` |
+| 同一主对话重复唤起侧聊 | 复用同一 tab（tab 类型不声明 `multiple`） |
+| 引用流程仿真（mini-React 执行真实 bundle） | 18 项全通过：工具条出现且为中文、点击开 tab、引用**不**进输入框、`quote/add` 落到宿主、卡片渲染出原文与 `×`、移除后卡片消失并通知宿主 |
+| 宿主半未重启时 | `POST /side-chat/api/quote/add` → `404 not-found`，卡片保留并标为「失败 + 原因」 |
 
-无头环境无法验证：内嵌面板是否真的绘制、该宿主是否提供 `sessions.retain`。后者缺失时面板会明确报错。
+无头环境无法验证：内嵌面板是否真的绘制、`conversation.input.dock` 在桌面壳里的实际位置、该宿主是否提供 `sessions.retain`。后两者缺失时分别表现为「卡片不出现（但引用仍进上下文）」与「面板明确报错」。
 
 ## 图标
 
